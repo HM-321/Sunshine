@@ -1,0 +1,189 @@
+---
+name: Dev Windows x64
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - feature/text-clipboard-sync
+  workflow_dispatch:
+
+concurrency:
+  group: dev-windows-x64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ucrt64
+          update: true
+          cache: true
+          install: >-
+            wget
+
+      - name: Install build dependencies
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          dependencies=(
+            git
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-qt6-static
+            mingw-w64-ucrt-x86_64-toolchain
+          )
+
+          pacman -Syu --noconfirm --needed "${dependencies[@]}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Export Node.js path
+        shell: pwsh
+        run: |
+          $nodePath = Split-Path -Parent (Get-Command node).Source
+          "NODEJS_PATH=$nodePath" >> $env:GITHUB_ENV
+
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Sync Python tools
+        shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
+          UV_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+
+          uv sync \
+            --locked \
+            --no-python-downloads \
+            --no-install-project
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: sunshine-windows-x64-ccache-${{ github.sha }}
+          restore-keys: |
+            sunshine-windows-x64-ccache-
+
+      - name: Configure ccache
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          pacman -S --noconfirm --needed \
+            mingw-w64-ucrt-x86_64-ccache
+
+          mkdir -p .ccache
+
+          ccache --set-config=cache_dir="${GITHUB_WORKSPACE}/.ccache"
+          ccache --set-config=max_size=2G
+          ccache --set-config=compression=true
+          ccache --zero-stats
+
+      - name: Configure
+        shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
+          BRANCH: ${{ github.ref_name }}
+          BUILD_VERSION: dev-${{ github.run_number }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          NODEJS_PATH="$(cygpath "${NODEJS_PATH}")"
+          export PATH="${PATH}:${NODEJS_PATH}"
+
+          cmake \
+            -B build \
+            -G Ninja \
+            -S . \
+            -DBUILD_WERROR=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DSUNSHINE_ASSETS_DIR=assets \
+            -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
+            -DSUNSHINE_PUBLISHER_WEBSITE="https://github.com/${GITHUB_REPOSITORY}" \
+            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/${GITHUB_REPOSITORY}/issues"
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          ninja -C build sunshine
+
+      - name: Package portable ZIP
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          ninja -C build
+          mkdir -p artifacts
+
+          cd build
+          cpack -G ZIP
+
+          cp \
+            cpack_artifacts/Sunshine.zip \
+            ../artifacts/Sunshine-Windows-x64-dev.zip
+
+      - name: Compiler cache statistics
+        if: always()
+        shell: msys2 {0}
+        run: |
+          ccache --show-stats || true
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          name: Sunshine-Windows-x64-${{ github.sha }}
+          path: artifacts/Sunshine-Windows-x64-dev.zip
+          compression-level: 0
+          if-no-files-found: error
