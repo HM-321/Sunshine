@@ -29,6 +29,8 @@
 #include <rs.h>
 #ifdef _WIN32
   #include <libvirtualhid/license.hpp>
+
+  #include "platform/windows/clipboard.h"
 #endif
 
 // local includes
@@ -108,7 +110,11 @@ LRESULT CALLBACK SessionMonitorWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
       DestroyWindow(hwnd);
       return 0;
     case WM_DESTROY:
+      platf::clipboard::stop(hwnd);
       PostQuitMessage(0);
+      return 0;
+    case WM_CLIPBOARDUPDATE:
+      platf::clipboard::handle_update();
       return 0;
     case WM_ENDSESSION:
       {
@@ -354,6 +360,11 @@ int main(int argc, char *argv[]) {
     }
 
     ShowWindow(wnd, SW_HIDE);
+
+    if (!platf::clipboard::start(wnd)) {
+      BOOST_LOG(warning)
+        << "Windows clipboard monitoring is unavailable";
+    }
 
     // Run the message loop for our window
     MSG msg {};
