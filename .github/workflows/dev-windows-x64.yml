@@ -61,6 +61,7 @@ jobs:
             mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-opus
             mingw-w64-ucrt-x86_64-qt6-static
+            mingw-w64-ucrt-x86_64-libtiff
             mingw-w64-ucrt-x86_64-toolchain
           )
 
